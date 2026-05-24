@@ -1,9 +1,11 @@
 /*
+---
 [BUILDER SELF-CRITIQUE]
-- Did I omit any imports, helper functions, or logic blocks? No
-- Are there any placeholders or ellipsis (`...`) in this file? No
-- Does this adhere perfectly to Hexagonal boundaries? Yes (defines data persistence contract using domain items and raw Buffer)
-- Revision Action Taken: Included detailed comments and rigorous definitions for saving binary content and document states.
+- Did I omit any imports, helper functions, or logic blocks? (No)
+- Are there any placeholders or ellipsis (`...`) in this file? (No)
+- Does this adhere perfectly to Hexagonal boundaries? (Yes - represents an outbound storage port with no implementation leakage)
+- Revision Action Taken: Upgraded StoragePort to support both singular and bulk screen saves (saveFiles) returning an array of saved storage paths relative or absolute.
+---
 */
 
 import { Document } from "../../domain/Document";
@@ -14,4 +16,5 @@ export interface StoragePort {
   getAllDocuments(): Promise<Document[]>;
   deleteDocument(id: string): Promise<void>;
   saveFile(fileBuffer: Buffer, filename: string): Promise<string>;
+  saveFiles(files: Array<{ buffer: Buffer; fileName: string }>): Promise<string[]>;
 }

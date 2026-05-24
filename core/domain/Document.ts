@@ -1,9 +1,11 @@
 /*
+---
 [BUILDER SELF-CRITIQUE]
-- Did I omit any imports, helper functions, or logic blocks? No
-- Are there any placeholders or ellipsis (`...`) in this file? No
-- Does this adhere perfectly to Hexagonal boundaries? Yes (pure TS domain, imports only from sibling domain files)
-- Revision Action Taken: Wrapped the self-critique block in standard TypeScript multi-line comments to pass linter and parser rules.
+- Did I omit any imports, helper functions, or logic blocks? (No)
+- Are there any placeholders or ellipsis (`...`) in this file? (No)
+- Does this adhere perfectly to Hexagonal boundaries? (Yes - pure TS domain object with solid encapsulation)
+- Revision Action Taken: Upgraded Document domain object to accept arrays of original filenames and localized folder storage paths, implementing strict array size validation and array element safety.
+---
 */
 
 import { CaterpillarsAdvice } from "./CaterpillarsAdvice";
@@ -11,7 +13,8 @@ import { CaterpillarsAdvice } from "./CaterpillarsAdvice";
 export class Document {
   private readonly _id: string;
   private readonly _title: string;
-  private readonly _originalFilename: string;
+  private readonly _originalFilenames: string[];
+  private readonly _filePaths: string[];
   private _extractedText: string | undefined;
   private _audioUrl: string | undefined;
   private readonly _createdAt: Date;
@@ -20,7 +23,8 @@ export class Document {
   constructor(
     id: string,
     title: string,
-    originalFilename: string,
+    originalFilenames: string[],
+    filePaths: string[],
     createdAt: Date,
     extractedText?: string,
     audioUrl?: string,
@@ -32,8 +36,21 @@ export class Document {
     if (!title || title.trim() === "") {
       throw new Error("Document title cannot be empty.");
     }
-    if (!originalFilename || originalFilename.trim() === "") {
-      throw new Error("Original filename cannot be empty.");
+    if (!Array.isArray(originalFilenames) || originalFilenames.length === 0) {
+      throw new Error("Document must have at least one original filename.");
+    }
+    for (const filename of originalFilenames) {
+      if (!filename || filename.trim() === "") {
+        throw new Error("Original filename elements cannot be empty.");
+      }
+    }
+    if (!Array.isArray(filePaths) || filePaths.length === 0) {
+      throw new Error("Document must have at least one file path.");
+    }
+    for (const pathVal of filePaths) {
+      if (!pathVal || pathVal.trim() === "") {
+        throw new Error("File path elements cannot be empty.");
+      }
     }
     if (!(createdAt instanceof Date) || isNaN(createdAt.getTime())) {
       throw new Error("A valid creation date is required.");
@@ -41,7 +58,8 @@ export class Document {
 
     this._id = id.trim();
     this._title = title.trim();
-    this._originalFilename = originalFilename.trim();
+    this._originalFilenames = originalFilenames.map(f => f.trim());
+    this._filePaths = filePaths.map(p => p.trim());
     this._createdAt = createdAt;
     this._extractedText = extractedText ? extractedText.trim() : undefined;
     this._audioUrl = audioUrl ? audioUrl.trim() : undefined;
@@ -57,8 +75,12 @@ export class Document {
     return this._title;
   }
 
-  public get originalFilename(): string {
-    return this._originalFilename;
+  public get originalFilenames(): string[] {
+    return [...this._originalFilenames];
+  }
+
+  public get filePaths(): string[] {
+    return [...this._filePaths];
   }
 
   public get extractedText(): string | undefined {

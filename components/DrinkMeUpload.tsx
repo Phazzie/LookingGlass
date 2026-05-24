@@ -24,6 +24,7 @@ export function DrinkMeUpload({
 }: DrinkMeUploadProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [uploadingCount, setUploadingCount] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
@@ -44,14 +45,14 @@ export function DrinkMeUpload({
 
     const files = e.dataTransfer.files;
     if (files && files.length > 0) {
-      await processUploadFile(files[0]);
+      await processUploadFiles(Array.from(files));
     }
   };
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (files && files.length > 0) {
-      await processUploadFile(files[0]);
+      await processUploadFiles(Array.from(files));
     }
   };
 
@@ -60,19 +61,24 @@ export function DrinkMeUpload({
     fileInputRef.current?.click();
   };
 
-  const processUploadFile = async (file: File) => {
+  const processUploadFiles = async (files: File[]) => {
     // 1. Verification of Image Type
-    if (!file.type.startsWith("image/")) {
-      onUploadError("Only screenshot image files (PNG, JPEG, WebP) are allowed.");
-      return;
+    for (const file of files) {
+      if (!file.type.startsWith("image/")) {
+        onUploadError("Only screenshot image files (PNG, JPEG, WebP) are allowed.");
+        return;
+      }
     }
 
     try {
       setIsProcessing(true);
+      setUploadingCount(files.length);
       onUploadStart();
 
       const formData = new FormData();
-      formData.append("file", file);
+      for (const file of files) {
+        formData.append("files", file);
+      }
 
       const response = await fetch("/api/documents", {
         method: "POST",
@@ -87,10 +93,11 @@ export function DrinkMeUpload({
 
       onUploadSuccess(data);
     } catch (error) {
-      const msg = (error as Error).message || "Failed to process screenshot.";
+      const msg = (error as Error).message || "Failed to process screenshots.";
       onUploadError(msg);
     } finally {
       setIsProcessing(false);
+      setUploadingCount(0);
       // Reset input value to allow uploading same file again
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
@@ -107,6 +114,7 @@ export function DrinkMeUpload({
         ref={fileInputRef}
         onChange={handleFileChange}
         accept="image/*"
+        multiple
         className="hidden"
       />
 
@@ -172,10 +180,12 @@ export function DrinkMeUpload({
           {isProcessing ? (
             <div>
               <p className="font-serif text-amber-500 text-sm animate-pulse flex items-center justify-center gap-1">
-                Distilling Screenshots...
+                {uploadingCount > 1 ? `Brewing a stack of ${uploadingCount} scrolls...` : "Distilling Screenshots..."}
               </p>
               <p className="text-[10px] text-purple-200/60 mt-1 max-w-[200px] mx-auto">
-                Gemini is transcribing scholarly glyphs with visual sorcery.
+                {uploadingCount > 1 
+                  ? `Gemini is transcribing these ${uploadingCount} textbook pages into a cohesive story.`
+                  : "Gemini is transcribing scholarly glyphs with visual sorcery."}
               </p>
             </div>
           ) : (

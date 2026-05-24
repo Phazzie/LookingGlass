@@ -1,10 +1,10 @@
 /*
 ---
 [BUILDER SELF-CRITIQUE]
-- Did I omit any imports, helper functions, or logic blocks? No
-- Are there any placeholders or ellipsis (`...`) in this file? No
-- Does this adhere perfectly to Hexagonal boundaries? Yes (implements StoragePort, uses Node.js fs/promises to manage local JSON flat DB and raw images)
-- Revision Action Taken: Strictly initialized target system directories synchronously, implemented proper Promise-based atomic reads/writes, handled nested date/advice conversions cleanly during reconstruction.
+- Did I omit any imports, helper functions, or logic blocks? (No)
+- Are there any placeholders or ellipsis (`...`) in this file? (No)
+- Does this adhere perfectly to Hexagonal boundaries? (Yes - implements the updated StoragePort outbound port interface completely)
+- Revision Action Taken: Implemented saveFiles to write arrays of Buffers in sequential order, updated serialization/deserialization to work with arrays of originalFilenames and filePaths while keeping robust backwards compatibility mapping.
 ---
 */
 
@@ -18,12 +18,15 @@ import { CaterpillarsAdvice, GlossaryItem } from "../../domain/CaterpillarsAdvic
 interface SerializedAdvice {
   explanationText: string;
   glossary: GlossaryItem[];
+  focusSessionScript?: Array<{ speaker: "Narrator" | "Alice"; text: string }>;
 }
 
 interface SerializedDocument {
   id: string;
   title: string;
-  originalFilename: string;
+  originalFilename?: string; // legacy support
+  originalFilenames?: string[];
+  filePaths?: string[];
   extractedText?: string;
   audioUrl?: string;
   createdAt: string;
@@ -102,6 +105,22 @@ export class LocalStorageAdapter implements StoragePort {
   }
 
   /**
+   * Saves multiple biological screenshot files to local public uploads.
+   */
+  public async saveFiles(files: Array<{ buffer: Buffer; fileName: string }>): Promise<string[]> {
+    if (!Array.isArray(files) || files.length === 0) {
+      throw new Error("Cannot save empty files payload.");
+    }
+
+    const savedFilesPaths: string[] = [];
+    for (const file of files) {
+      const savedPath = await this.saveFile(file.buffer, file.fileName);
+      savedFilesPaths.push(savedPath);
+    }
+    return savedFilesPaths;
+  }
+
+  /**
    * Serializes and persists/updates a Document record in the flat-file database.
    */
   public async saveDocument(document: Document): Promise<void> {
@@ -115,14 +134,17 @@ export class LocalStorageAdapter implements StoragePort {
     if (document.explanation) {
       serializedExplanation = {
         explanationText: document.explanation.explanationText,
-        glossary: document.explanation.glossary
+        glossary: document.explanation.glossary,
+        focusSessionScript: document.explanation.focusSessionScript
       };
     }
 
     const serializedDoc: SerializedDocument = {
       id: document.id,
       title: document.title,
-      originalFilename: document.originalFilename,
+      originalFilename: document.originalFilenames[0] || "", // Keep legacy single field filled
+      originalFilenames: document.originalFilenames,
+      filePaths: document.filePaths,
       extractedText: document.extractedText,
       audioUrl: document.audioUrl,
       createdAt: document.createdAt.toISOString(),
@@ -152,14 +174,19 @@ export class LocalStorageAdapter implements StoragePort {
     if (docRecord.explanation) {
       domainExplanation = new CaterpillarsAdvice(
         docRecord.explanation.explanationText,
-        docRecord.explanation.glossary
+        docRecord.explanation.glossary,
+        docRecord.explanation.focusSessionScript
       );
     }
+
+    const originalFilenames = docRecord.originalFilenames || (docRecord.originalFilename ? [docRecord.originalFilename] : []);
+    const filePaths = docRecord.filePaths || (docRecord.originalFilename ? [path.join(this.uploadDir, docRecord.originalFilename)] : []);
 
     return new Document(
       docRecord.id,
       docRecord.title,
-      docRecord.originalFilename,
+      originalFilenames,
+      filePaths,
       new Date(docRecord.createdAt),
       docRecord.extractedText,
       docRecord.audioUrl,
@@ -181,14 +208,19 @@ export class LocalStorageAdapter implements StoragePort {
       if (docRecord.explanation) {
         domainExplanation = new CaterpillarsAdvice(
           docRecord.explanation.explanationText,
-          docRecord.explanation.glossary
+          docRecord.explanation.glossary,
+          docRecord.explanation.focusSessionScript
         );
       }
+
+      const originalFilenames = docRecord.originalFilenames || (docRecord.originalFilename ? [docRecord.originalFilename] : []);
+      const filePaths = docRecord.filePaths || (docRecord.originalFilename ? [path.join(this.uploadDir, docRecord.originalFilename)] : []);
 
       const doc = new Document(
         docRecord.id,
         docRecord.title,
-        docRecord.originalFilename,
+        originalFilenames,
+        filePaths,
         new Date(docRecord.createdAt),
         docRecord.extractedText,
         docRecord.audioUrl,
@@ -221,14 +253,16 @@ export class LocalStorageAdapter implements StoragePort {
     delete db[id];
     await this.writeDatabase(db);
 
-    // Delete uploaded image from disk if possible
+    // Delete uploaded images from disk if possible
     try {
-      const originalFilePath = path.join(this.uploadDir, docRecord.originalFilename);
-      if (fs.existsSync(originalFilePath)) {
-        await fsPromises.unlink(originalFilePath);
+      const pathsToDelete = docRecord.filePaths || (docRecord.originalFilename ? [path.join(this.uploadDir, docRecord.originalFilename)] : []);
+      for (const filePath of pathsToDelete) {
+        if (filePath && fs.existsSync(filePath)) {
+          await fsPromises.unlink(filePath);
+        }
       }
     } catch {
-      // Ignored: Fail gracefully if file deleted previously
+      // Ignored: Fail gracefully if files deleted previously
     }
   }
 }

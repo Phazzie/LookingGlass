@@ -1,9 +1,11 @@
 /*
+---
 [BUILDER SELF-CRITIQUE]
-- Did I omit any imports, helper functions, or logic blocks? No
-- Are there any placeholders or ellipsis (`...`) in this file? No
-- Does this adhere perfectly to Hexagonal boundaries? Yes (delivery layer api adapter mapping to ExplainTextRequest port)
-- Revision Action Taken: Configured type contexts for parameter Promises, awaited the dynamic id in a fully type-safe manner, called the unified service flow, and serialized the returned Advice structure perfectly.
+- Did I omit any imports, helper functions, or logic blocks? (No)
+- Are there any placeholders or ellipsis (`...`) in this file? (No)
+- Does this adhere perfectly to Hexagonal boundaries? (Yes - Delivery adapter translating HTTP payload parameters to inward use cases)
+- Revision Action Taken: Upgraded the POST handler to check the JSON request body for 'focusTimeMinutes' parameter, translating details seamlessly to the DocumentService execute call.
+---
 */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -27,8 +29,19 @@ export async function POST(req: NextRequest, context: RouteContext) {
       return NextResponse.json({ error: "Document ID parameter is required." }, { status: 400 });
     }
 
+    let focusTimeMinutes: number | undefined = undefined;
+    try {
+      const body = await req.json();
+      if (body && typeof body.focusTimeMinutes === "number") {
+        focusTimeMinutes = body.focusTimeMinutes;
+      }
+    } catch {
+      // Body might be empty or missing JSON payload, carry forward with undefined
+    }
+
     const document = await documentService.execute({
-      documentId: id
+      documentId: id,
+      focusTimeMinutes
     });
 
     const serialized = serializeDocument(document);

@@ -1,10 +1,10 @@
 /*
 ---
 [BUILDER SELF-CRITIQUE]
-- Did I omit any imports, helper functions, or logic blocks? No
-- Are there any placeholders or ellipsis (`...`) in this file? No
-- Does this adhere perfectly to Hexagonal boundaries? Yes (pure domain orchestration service, resolves inputs purely through ports)
-- Revision Action Taken: Strictly followed correct path resolution, handled timestamp-based unique ID generation cleanly, and mapped the API-exposed path structure of the synthesized MP3 audio correctly.
+- Did I omit any imports, helper functions, or logic blocks? (No)
+- Are there any placeholders or ellipsis (`...`) in this file? (No)
+- Does this adhere perfectly to Hexagonal boundaries? (Yes - represents the pure orchestration domain service boundary)
+- Revision Action Taken: Converted executeReadDocument to extract multiple files, save them collectively via storage saveFiles, invoke OCR in batch, and instantiate the updated multi-screenshot Document domain model.
 ---
 */
 
@@ -42,7 +42,7 @@ export class DocumentService implements ReadDocumentUseCase, ExplainTextUseCase,
    * Universal execute method implementation that satisfies both ReadDocumentUseCase and ExplainTextUseCase.
    */
   public async execute(request: ReadDocumentRequest | ExplainTextRequest): Promise<Document> {
-    if ("fileBuffer" in request) {
+    if ("files" in request) {
       return this.executeReadDocument(request);
     } else {
       return this.executeExplainText(request);
@@ -50,42 +50,57 @@ export class DocumentService implements ReadDocumentUseCase, ExplainTextUseCase,
   }
 
   /**
-   * Reads an uploaded screenshot file, extracts text via OCR, synthesizes TTS audio,
-   * constructs the Document domain model, saves file/metadata, and returns the entity.
+   * Reads multiple uploaded screenshot files, extracts text via multi-image OCR, synthesizes TTS audio,
+   * constructs the Document domain model with multiple filename segments, saves metadata, and returns the entity.
    */
   private async executeReadDocument(request: ReadDocumentRequest): Promise<Document> {
-    const documentId = `doc_${Date.now()}`;
-    
-    // Determine extension or default to png
-    const extension = request.originalFilename.split(".").pop() || "png";
-    const savedFilename = `${documentId}_original.${extension}`;
-
-    // 1. Save binary file buffer via Storage Adapter
-    const savedFilePath = await this.storagePort.saveFile(request.fileBuffer, savedFilename);
-
-    // 2. Extract academic text using visual Multimodal model
-    const extractedText = await this.ocrPort.extractText(request.fileBuffer, request.mimeType);
-
-    if (!extractedText || extractedText.trim() === "") {
-      throw new Error("Unable to extract any text from the provided screenshot image.");
+    if (!request.files || request.files.length === 0) {
+      throw new Error("No textbook screenshots uploaded for processing.");
     }
 
-    // Determine readable document title
-    const rawTitle = request.originalFilename.replace(/\.[^/.]+$/, "");
+    const documentId = `doc_${Date.now()}`;
+    
+    // 1. Prepare file array for storage saving
+    const filesToSave = request.files.map((file, idx) => {
+      const extension = file.originalFilename.split(".").pop() || "png";
+      const savedFilename = `${documentId}_page_${idx + 1}.${extension}`;
+      return {
+        buffer: file.fileBuffer,
+        fileName: savedFilename
+      };
+    });
+
+    const savedFilenames = filesToSave.map(file => file.fileName);
+
+    // Save all binary file buffers via Storage Adapter
+    const savedFilePaths = await this.storagePort.saveFiles(filesToSave);
+
+    // 2. Extract academic text across all buffers sequentially utilizing Gemini multimodal vision prompt
+    const buffersToOcr = request.files.map(file => file.fileBuffer);
+    const extractedText = await this.ocrPort.extractText(buffersToOcr);
+
+    if (!extractedText || extractedText.trim() === "") {
+      throw new Error("Unable to extract any text from the provided textbook page screenshots.");
+    }
+
+    // Determine readable document title based off of first page file name
+    const firstFilename = request.files[0].originalFilename;
+    const rawTitle = firstFilename.replace(/\.[^/.]+$/, "");
     const docTitle = rawTitle.charAt(0).toUpperCase() + rawTitle.slice(1);
 
     // 3. Create Document domain entity
     const document = new Document(
       documentId,
       docTitle,
-      savedFilename,
+      savedFilenames,
+      savedFilePaths,
       new Date(),
       extractedText
     );
 
     // 4. Synthesize native text-to-speech audio using Gemini voice generation adapter
     const audioFilename = `${documentId}.mp3`;
-    const audioFilePath = await this.ttsPort.synthesizeSpeech(extractedText, audioFilename);
+    await this.ttsPort.synthesizeSpeech(extractedText, audioFilename);
 
     // Point the public API url to the route we will expose
     document.setAudioUrl(`/api/audio/${audioFilename}`);
@@ -106,8 +121,8 @@ export class DocumentService implements ReadDocumentUseCase, ExplainTextUseCase,
       throw new Error(`Document with ID ${request.documentId} does not exist in our library.`);
     }
 
-    // Cache lookup: If explanation advice is already present, return it immediately
-    if (document.hasExplanation()) {
+    // Cache lookup: If explanation advice is already present AND no specific focusTimeMinutes requested, return it immediately
+    if (document.hasExplanation() && request.focusTimeMinutes === undefined) {
       return document;
     }
 
@@ -116,8 +131,11 @@ export class DocumentService implements ReadDocumentUseCase, ExplainTextUseCase,
       throw new Error("Cannot consult the Caterpillar on an empty document text.");
     }
 
-    // Query explanation adapter to translate into "normal people terms"
-    const caterpillarsAdvice = await this.explanationPort.generateExplanation(textToExplain);
+    // Query explanation adapter with optional focus pacing configuration parameter
+    const caterpillarsAdvice = await this.explanationPort.generateExplanation(
+      textToExplain,
+      request.focusTimeMinutes
+    );
 
     // Attach domain entity
     document.setExplanation(caterpillarsAdvice);
