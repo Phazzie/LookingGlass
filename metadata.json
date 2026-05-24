@@ -1,0 +1,6 @@
+{
+  "name": "Through the Looking Glass",
+  "description": "An Alice in Wonderland-themed academic reader that helps adult college students returning to academia easily upload, listen to, and comprehend dense screenshots, complete with audio narration and explanation.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
