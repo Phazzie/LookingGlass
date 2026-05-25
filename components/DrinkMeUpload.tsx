@@ -62,12 +62,26 @@ export function DrinkMeUpload({
   };
 
   const processUploadFiles = async (files: File[]) => {
-    // 1. Verification of Image Type
+    // 1. Verification of Image Type & Payload Bounds
+    let totalSize = 0;
+    const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
+    const MAX_TOTAL_SIZE = 20 * 1024 * 1024; // 20MB
+
     for (const file of files) {
       if (!file.type.startsWith("image/")) {
         onUploadError("Only screenshot image files (PNG, JPEG, WebP) are allowed.");
         return;
       }
+      if (file.size > MAX_FILE_SIZE) {
+        onUploadError(`The scroll "${file.name}" is too heavy (Max 5MB per file).`);
+        return;
+      }
+      totalSize += file.size;
+    }
+
+    if (totalSize > MAX_TOTAL_SIZE) {
+       onUploadError("Your stack of scrolls is too thick! (Max 20MB total batch size).");
+       return;
     }
 
     try {
