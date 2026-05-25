@@ -1,19 +1,20 @@
 import { auth } from "./auth";
+import { NextResponse } from "next/server";
 
 export default auth((req) => {
-  const isLoggedIn = !!req.auth;
-  const isAuthRoute = req.nextUrl.pathname.startsWith("/api/auth");
-  const isLoginRoute = req.nextUrl.pathname === "/login";
+  const { pathname } = req.nextUrl;
 
-  if (isAuthRoute) {
-    return;
-  }
+  const isPublic =
+    pathname.startsWith("/login") ||
+    pathname.startsWith("/api/auth");
 
-  if (!isLoggedIn && !isLoginRoute) {
-    return Response.redirect(new URL("/login", req.nextUrl));
+  if (!req.auth && !isPublic) {
+    const loginUrl = new URL("/login", req.url);
+    loginUrl.searchParams.set("callbackUrl", req.url);
+    return NextResponse.redirect(loginUrl);
   }
 });
 
 export const config = {
-  matcher: ["/((?!api|_next/static|_next/image|favicon.ico).*)"],
+  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
 };

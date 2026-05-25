@@ -23,13 +23,13 @@ export class ExplainTextUseCaseImpl implements ExplainTextUseCase {
   }
 
   public async execute(request: ExplainTextRequest): Promise<Document> {
-    const { documentId, focusTimeMinutes, userId } = request as any;
+    const { documentId, focusTimeMinutes } = request;
 
     if (!documentId || documentId.trim() === "") {
       throw new Error("Document ID parameter is required for explanation generation.");
     }
 
-    const document = await this.storagePort.getDocumentById(userId, documentId);
+    const document = await this.storagePort.getDocumentById(documentId, request.userId);
     if (!document) {
       throw new Error(`Document with ID ${documentId} does not exist in our library.`);
     }
@@ -55,7 +55,7 @@ export class ExplainTextUseCaseImpl implements ExplainTextUseCase {
     document.setExplanation(caterpillarsAdvice);
 
     // Save update cleanly inside database storage
-    await this.storagePort.saveDocument((request as any).userId, document);
+    await this.storagePort.saveDocument(document);
 
     return document;
   }

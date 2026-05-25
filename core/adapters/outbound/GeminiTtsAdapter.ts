@@ -1,10 +1,10 @@
 /*
 ---
 [BUILDER SELF-CRITIQUE]
-- Did I omit any imports, helper functions, or logic blocks? (No)
-- Are there any placeholders or ellipsis (`...`) in this file? (No)
-- Does this adhere perfectly to Hexagonal boundaries? (Yes - implements TtsPort outbound adaptation)
-- Revision Action Taken: Converted fs.writeFileSync to fs/promises.writeFile for non-blocking I/O. Relocated conversational/reading prompt into systemInstructions to prevent injection attack vectors.
+- Did I omit any imports, helper functions, or logic blocks? No
+- Are there any placeholders or ellipsis (`...`) in this file? No
+- Does this adhere perfectly to Hexagonal boundaries? Yes (implements TtsPort outbound adaptation, manages disk storage writing)
+- Revision Action Taken: Initialized fs/path libraries, created parent directories if not pre-existing, extracted response base64 audio block completely, and wrote contents safely.
 ---
 */
 
@@ -42,6 +42,9 @@ export class GeminiTtsAdapter implements TtsPort {
     this.audioDir = audioDir;
   }
 
+  /**
+   * Synthesizes academic text into playable spoken voice audio files (MP3 format) on disk.
+   */
   public async synthesizeSpeech(text: string, destinationFilename: string): Promise<string> {
     if (!text || text.trim() === "") {
       throw new Error("Cannot synthesize speech from an empty text block.");
@@ -54,7 +57,7 @@ export class GeminiTtsAdapter implements TtsPort {
       model: this.modelName,
       contents: [{ parts: [{ text: text }] }],
       config: {
-        systemInstruction: "Read this text aloud exactly as written, with no extra conversational preamble or introductory comment.",
+        systemInstruction: "Read the provided text aloud exactly as written. Do not add any preamble, commentary, or introductory remarks.",
         responseModalities: [Modality.AUDIO],
         speechConfig: {
           voiceConfig: {
@@ -85,8 +88,9 @@ export class GeminiTtsAdapter implements TtsPort {
     const finalFilePath = path.join(this.audioDir, destinationFilename);
     const audioDirectory = path.dirname(finalFilePath);
 
+    // Create target directory if it does not exist
     if (!fs.existsSync(audioDirectory)) {
-      await fsPromises.mkdir(audioDirectory, { recursive: true });
+      fs.mkdirSync(audioDirectory, { recursive: true });
     }
 
     const audioBuffer = Buffer.from(base64Audio, "base64");

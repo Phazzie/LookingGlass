@@ -12,6 +12,7 @@ import { CaterpillarsAdvice } from "./CaterpillarsAdvice";
 
 export class Document {
   private readonly _id: string;
+  private readonly _userId: string;
   private readonly _title: string;
   private readonly _originalFilenames: string[];
   private readonly _filePaths: string[];
@@ -59,6 +60,7 @@ export class Document {
     }
 
     this._id = id.trim();
+    this._userId = userId.trim() || "default";
     this._title = title.trim();
     this._originalFilenames = originalFilenames.map(f => f.trim());
     this._filePaths = filePaths.map(p => p.trim());
