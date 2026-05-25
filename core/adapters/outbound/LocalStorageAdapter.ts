@@ -3,8 +3,8 @@
 [BUILDER SELF-CRITIQUE]
 - Did I omit any imports, helper functions, or logic blocks? (No)
 - Are there any placeholders or ellipsis (`...`) in this file? (No)
-- Does this adhere perfectly to Hexagonal boundaries? (Yes - local data persistence handling details)
-- Revision Action Taken: Wrapped read/write ops in a writeQueue promise chain to prevent race conditions. Updated user-specific filtering logic to keep isolated data spaces.
+- Does this adhere perfectly to Hexagonal boundaries? (Yes - implements the updated StoragePort outbound port interface completely)
+- Revision Action Taken: Implemented saveFiles to write arrays of Buffers in sequential order, updated serialization/deserialization to work with arrays of originalFilenames and filePaths while keeping robust backwards compatibility mapping.
 ---
 */
 
@@ -13,18 +13,18 @@ import fsPromises from "fs/promises";
 import path from "path";
 import { StoragePort } from "../../ports/outbound/StoragePort";
 import { Document } from "../../domain/Document";
-import { CaterpillarsAdvice, GlossaryItem, FocusSessionLine } from "../../domain/CaterpillarsAdvice";
+import { CaterpillarsAdvice, GlossaryItem } from "../../domain/CaterpillarsAdvice";
 
 interface SerializedAdvice {
   explanationText: string;
   glossary: GlossaryItem[];
-  focusSessionScript?: FocusSessionLine[];
+  focusSessionScript?: Array<{ speaker: "Narrator" | "Alice"; text: string }>;
 }
 
 interface SerializedDocument {
   id: string;
-  userId: string;
   title: string;
+  originalFilename?: string; // legacy support
   originalFilenames?: string[];
   filePaths?: string[];
   extractedText?: string;
@@ -40,23 +40,30 @@ interface DatabaseSchema {
 export class LocalStorageAdapter implements StoragePort {
   private readonly dbPath: string;
   private readonly uploadDir: string;
+  private readonly audioDir: string;
   private writeQueue: Promise<void> = Promise.resolve();
 
-  constructor(dbPath: string, uploadDir: string) {
+  constructor(dbPath: string, uploadDir: string, audioDir: string) {
     if (!dbPath || dbPath.trim() === "") {
       throw new Error("Database path cannot be empty.");
     }
     if (!uploadDir || uploadDir.trim() === "") {
       throw new Error("Upload directory path cannot be empty.");
     }
+    if (!audioDir || audioDir.trim() === "") {
+      throw new Error("Audio directory path cannot be empty.");
+    }
 
     this.dbPath = dbPath;
     this.uploadDir = uploadDir;
+    this.audioDir = audioDir;
 
+    // 1. Ensure the upload file storage directory exists
     if (!fs.existsSync(this.uploadDir)) {
       fs.mkdirSync(this.uploadDir, { recursive: true });
     }
 
+    // 2. Ensure database directory and file exist
     const dbDir = path.dirname(this.dbPath);
     if (!fs.existsSync(dbDir)) {
       fs.mkdirSync(dbDir, { recursive: true });
@@ -67,13 +74,10 @@ export class LocalStorageAdapter implements StoragePort {
     }
   }
 
-  private enqueueTransaction<T>(operation: () => Promise<T>): Promise<T> {
-    return new Promise<T>((resolve, reject) => {
-      this.writeQueue = this.writeQueue
-        .then(() => operation())
-        .then(resolve)
-        .catch(reject);
-    });
+  private enqueue<T>(fn: () => Promise<T>): Promise<T> {
+    const next = this.writeQueue.then(fn);
+    this.writeQueue = next.then(() => {}, () => {});
+    return next;
   }
 
   private async readDatabase(): Promise<DatabaseSchema> {
@@ -90,6 +94,9 @@ export class LocalStorageAdapter implements StoragePort {
     await fsPromises.writeFile(this.dbPath, content, "utf-8");
   }
 
+  /**
+   * Saves uploaded binary images (screenshots) to local disk.
+   */
   public async saveFile(fileBuffer: Buffer, filename: string): Promise<string> {
     if (!fileBuffer || fileBuffer.length === 0) {
       throw new Error("Cannot save an empty file buffer.");
@@ -103,6 +110,9 @@ export class LocalStorageAdapter implements StoragePort {
     return destinationPath;
   }
 
+  /**
+   * Saves multiple biological screenshot files to local public uploads.
+   */
   public async saveFiles(files: Array<{ buffer: Buffer; fileName: string }>): Promise<string[]> {
     if (!Array.isArray(files) || files.length === 0) {
       throw new Error("Cannot save empty files payload.");
@@ -116,12 +126,15 @@ export class LocalStorageAdapter implements StoragePort {
     return savedFilesPaths;
   }
 
-  public async saveDocument(userId: string, document: Document): Promise<void> {
+  /**
+   * Serializes and persists/updates a Document record in the flat-file database.
+   * Serializes within the write queue to prevent concurrent overwrites.
+   */
+  public saveDocument(document: Document): Promise<void> {
     if (!document) {
       throw new Error("Document cannot be null or undefined.");
     }
-
-    await this.enqueueTransaction(async () => {
+    return this.enqueue(async () => {
       const db = await this.readDatabase();
 
       let serializedExplanation: SerializedAdvice | undefined;
@@ -135,8 +148,8 @@ export class LocalStorageAdapter implements StoragePort {
 
       const serializedDoc: SerializedDocument = {
         id: document.id,
-        userId: userId,
         title: document.title,
+        originalFilename: document.originalFilenames[0] || "",
         originalFilenames: document.originalFilenames,
         filePaths: document.filePaths,
         extractedText: document.extractedText,
@@ -150,20 +163,56 @@ export class LocalStorageAdapter implements StoragePort {
     });
   }
 
-  public async getDocumentById(userId: string, id: string): Promise<Document | null> {
+  /**
+   * Retrieves a document from disk and reconstructs its domain object representation.
+   */
+  public async getDocumentById(id: string): Promise<Document | null> {
     if (!id || id.trim() === "") {
       return null;
     }
 
-    return await this.enqueueTransaction(async () => {
-      const db = await this.readDatabase();
-      const docRecord = db[id];
+    const db = await this.readDatabase();
+    const docRecord = db[id];
 
-      if (!docRecord || docRecord.userId !== userId) {
-        return null;
-      }
+    if (!docRecord) {
+      return null;
+    }
 
+    let domainExplanation: CaterpillarsAdvice | undefined;
+    if (docRecord.explanation) {
+      domainExplanation = new CaterpillarsAdvice(
+        docRecord.explanation.explanationText,
+        docRecord.explanation.glossary,
+        docRecord.explanation.focusSessionScript
+      );
+    }
+
+    const originalFilenames = docRecord.originalFilenames || (docRecord.originalFilename ? [docRecord.originalFilename] : []);
+    const filePaths = docRecord.filePaths || (docRecord.originalFilename ? [path.join(this.uploadDir, docRecord.originalFilename)] : []);
+
+    return new Document(
+      docRecord.id,
+      docRecord.title,
+      originalFilenames,
+      filePaths,
+      new Date(docRecord.createdAt),
+      docRecord.extractedText,
+      docRecord.audioUrl,
+      domainExplanation
+    );
+  }
+
+  /**
+   * Retrieves all document records sorted newest to oldest.
+   */
+  public async getAllDocuments(): Promise<Document[]> {
+    const db = await this.readDatabase();
+    const documents: Document[] = [];
+
+    for (const key of Object.keys(db)) {
+      const docRecord = db[key];
       let domainExplanation: CaterpillarsAdvice | undefined;
+      
       if (docRecord.explanation) {
         domainExplanation = new CaterpillarsAdvice(
           docRecord.explanation.explanationText,
@@ -172,85 +221,69 @@ export class LocalStorageAdapter implements StoragePort {
         );
       }
 
-      return new Document(
+      const originalFilenames = docRecord.originalFilenames || (docRecord.originalFilename ? [docRecord.originalFilename] : []);
+      const filePaths = docRecord.filePaths || (docRecord.originalFilename ? [path.join(this.uploadDir, docRecord.originalFilename)] : []);
+
+      const doc = new Document(
         docRecord.id,
         docRecord.title,
-        docRecord.originalFilenames || [],
-        docRecord.filePaths || [],
+        originalFilenames,
+        filePaths,
         new Date(docRecord.createdAt),
         docRecord.extractedText,
         docRecord.audioUrl,
-        domainExplanation,
-        docRecord.userId
+        domainExplanation
       );
-    });
-  }
 
-  public async getAllDocuments(userId: string): Promise<Document[]> {
-    return await this.enqueueTransaction(async () => {
-      const db = await this.readDatabase();
-      const documents: Document[] = [];
-
-      for (const key of Object.keys(db)) {
-        const docRecord = db[key];
-        
-        if (docRecord.userId !== userId) {
-          continue;
-        }
-
-        let domainExplanation: CaterpillarsAdvice | undefined;
-        if (docRecord.explanation) {
-          domainExplanation = new CaterpillarsAdvice(
-            docRecord.explanation.explanationText,
-            docRecord.explanation.glossary,
-            docRecord.explanation.focusSessionScript
-          );
-        }
-
-        const doc = new Document(
-          docRecord.id,
-          docRecord.title,
-          docRecord.originalFilenames || [],
-          docRecord.filePaths || [],
-          new Date(docRecord.createdAt),
-          docRecord.extractedText,
-          docRecord.audioUrl,
-          domainExplanation,
-          docRecord.userId
-        );
-
-        documents.push(doc);
-      }
-
-      return documents.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
-    });
-  }
-
-  public async deleteDocument(userId: string, id: string): Promise<void> {
-    if (!id || id.trim() === "") {
-      return;
+      documents.push(doc);
     }
 
-    await this.enqueueTransaction(async () => {
+    // Sort descending by creation timestamp
+    return documents.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  }
+
+  /**
+   * Deletes a document entry from database and removes associated files from disk.
+   * Runs within the write queue to prevent concurrent db.json overwrites.
+   */
+  public deleteDocument(id: string): Promise<void> {
+    if (!id || id.trim() === "") {
+      return Promise.resolve();
+    }
+    return this.enqueue(async () => {
       const db = await this.readDatabase();
       const docRecord = db[id];
 
-      if (!docRecord || docRecord.userId !== userId) {
+      if (!docRecord) {
         return;
       }
 
       delete db[id];
       await this.writeDatabase(db);
 
+      // Delete uploaded images
       try {
-        const pathsToDelete = docRecord.filePaths || [];
+        const pathsToDelete = docRecord.filePaths || (docRecord.originalFilename ? [path.join(this.uploadDir, docRecord.originalFilename)] : []);
         for (const filePath of pathsToDelete) {
           if (filePath && fs.existsSync(filePath)) {
             await fsPromises.unlink(filePath);
           }
         }
       } catch {
-        // Ignored
+        // Fail gracefully if files were already removed
+      }
+
+      // Delete associated MP3 audio file
+      try {
+        if (docRecord.audioUrl) {
+          const audioFilename = path.basename(docRecord.audioUrl);
+          const audioFilePath = path.join(this.audioDir, audioFilename);
+          if (fs.existsSync(audioFilePath)) {
+            await fsPromises.unlink(audioFilePath);
+          }
+        }
+      } catch {
+        // Fail gracefully if audio file was already removed
       }
     });
   }

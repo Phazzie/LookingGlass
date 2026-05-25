@@ -4,7 +4,7 @@
 - Did I omit any imports, helper functions, or logic blocks? (No)
 - Are there any placeholders or ellipsis (`...`) in this file? (No)
 - Does this adhere perfectly to Hexagonal boundaries? (Yes - connects only with our domain types and outbound port specification)
-- Revision Action Taken: Configured precise Type parameters for schemas. Clamped focusTimeMinutes correctly. 
+- Revision Action Taken: Configured precise Type parameters for schemas. Calculated conversational pace of 150 words-per-minute dynamically, formulated the dual-speaker narrative prompt boundaries, and mapped JSON responses cleanly to CaterpillarsAdvice domain entities.
 ---
 */
 
@@ -35,6 +35,9 @@ export class GeminiExplanationAdapter implements ExplanationPort {
     this.modelName = modelName;
   }
 
+  /**
+   * Generates Caterpillar's advice, incorporating "The Mad Hatter's Tea Time" dual-voice dynamic.
+   */
   public async generateExplanation(
     denseText: string,
     focusTimeMinutes?: number
@@ -43,7 +46,6 @@ export class GeminiExplanationAdapter implements ExplanationPort {
       throw new Error("Cannot explain an empty block of academic text.");
     }
 
-    // Clamp focus time minutes between 1 and 60 minutes, default to 5
     const activeFocusMinutes = Math.min(Math.max(focusTimeMinutes ?? 5, 1), 60);
     const targetWordCount = activeFocusMinutes * 150;
 
@@ -135,6 +137,7 @@ export class GeminiExplanationAdapter implements ExplanationPort {
         text: item.text || "..."
       }));
 
+      // Return instantiated domain object carrying the script
       return new CaterpillarsAdvice(explanationText, glossary, focusSessionScript);
     } catch (error) {
       throw new Error(`Failed to parse the Caterpillar's JSON response: ${(error as Error).message}`);

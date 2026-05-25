@@ -48,7 +48,7 @@ export async function POST(req: NextRequest, context: RouteContext) {
     try {
       const body = await req.json();
       if (body && typeof body.focusTimeMinutes === "number") {
-        focusTimeMinutes = body.focusTimeMinutes;
+        focusTimeMinutes = Math.min(Math.max(body.focusTimeMinutes, 1), 60);
       }
     } catch {
       // Body might be empty or missing JSON payload, carry forward with undefined

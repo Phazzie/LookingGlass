@@ -143,7 +143,7 @@ describe("DocumentService Orchestrator", () => {
       // Verify returned document layout details
       expect(doc).toBeInstanceOf(Document);
       expect(doc.id).toBeDefined();
-      expect(doc.title).toBe("Philosophy_ch1_p1"); // Extracted title base
+      expect(doc.title).toBe("Philosophy ch1 p1");
       expect(doc.originalFilenames).toHaveLength(2);
       expect(doc.originalFilenames[0]).toContain("_page_1.png");
       expect(doc.originalFilenames[1]).toContain("_page_2.png");
@@ -197,7 +197,7 @@ describe("DocumentService Orchestrator", () => {
         documentId: "doc_existing_123"
       };
 
-      const docWithExplanation = await service.executeExplainText(explainRequest);
+      const docWithExplanation = await service.executeExplanation(explainRequest);
 
       expect(docWithExplanation.hasExplanation()).toBe(true);
       expect(docWithExplanation.explanation?.explanationText).toContain(explanationAdapter.explanationTextResult);
@@ -215,7 +215,7 @@ describe("DocumentService Orchestrator", () => {
         focusTimeMinutes: 10
       };
 
-      const docWithExplanation = await service.executeExplainText(explainRequest);
+      const docWithExplanation = await service.executeExplanation(explainRequest);
       expect(docWithExplanation.explanation?.explanationText).toContain("[Paced for 10 mins]");
     });
 
@@ -229,12 +229,12 @@ describe("DocumentService Orchestrator", () => {
         documentId: "doc_existing_123"
       };
 
-      const resultDoc = await service.executeExplainText(explainRequest);
+      const resultDoc = await service.executeExplanation(explainRequest);
       expect(resultDoc.explanation?.explanationText).toBe("First advise explanation text.");
     });
 
     it("should throw error if matching Document is not found inside the storage library", async () => {
-      await expect(service.executeExplainText({ documentId: "doc_unknown" })).rejects.toThrow(
+      await expect(service.executeExplanation({ documentId: "doc_unknown" })).rejects.toThrow(
         "Document with ID doc_unknown does not exist in our library."
       );
     });
@@ -249,7 +249,7 @@ describe("DocumentService Orchestrator", () => {
       );
       await storageAdapter.saveDocument(emptyTextDoc);
 
-      await expect(service.executeExplainText({ documentId: "doc_empty_text" })).rejects.toThrow(
+      await expect(service.executeExplanation({ documentId: "doc_empty_text" })).rejects.toThrow(
         "Cannot consult the Caterpillar on an empty document text."
       );
     });
