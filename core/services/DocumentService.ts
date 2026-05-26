@@ -47,7 +47,7 @@ export class DocumentService implements ReadDocumentUseCase, ExplainTextUseCase,
     if ("files" in request) {
       return this.executeReadDocument(request);
     } else {
-      return this.executeExplainText(request);
+      return this.executeExplanation(request);
     }
   }
 
@@ -60,11 +60,15 @@ export class DocumentService implements ReadDocumentUseCase, ExplainTextUseCase,
         throw new ValidationError("No textbook screenshots uploaded for processing.");
     }
 
-    const documentId = `doc_${Date.now()}`;
+    const documentId = `doc_${crypto.randomUUID()}`;
+    const allowedExtensions = ["png", "jpg", "jpeg", "gif", "webp"];
     
     // 1. Prepare file array for storage saving
     const filesToSave = request.files.map((file, idx) => {
-      const extension = file.originalFilename.split(".").pop() || "png";
+      const extension = (file.originalFilename.split(".").pop() || "").toLowerCase();
+      if (!allowedExtensions.includes(extension)) {
+        throw new ValidationError(`Invalid file extension '${extension}'. Allowed extensions are ${allowedExtensions.join(", ")}`);
+      }
       const savedFilename = `${documentId}_page_${idx + 1}.${extension}`;
       return {
         buffer: file.fileBuffer,
@@ -98,16 +102,19 @@ export class DocumentService implements ReadDocumentUseCase, ExplainTextUseCase,
     // Determine readable document title based off of first page file name
     const firstFilename = request.files[0].originalFilename;
     const rawTitle = firstFilename.replace(/\.[^/.]+$/, "");
-    const docTitle = rawTitle.charAt(0).toUpperCase() + rawTitle.slice(1);
+    const docTitle = (rawTitle.charAt(0).toUpperCase() + rawTitle.slice(1)).replace(/[^a-zA-Z0-9 -]/g, "");
 
     // 3. Create Document domain entity
     const document = new Document(
       documentId,
-      docTitle,
+      docTitle || "Untitled Document",
       savedFilenames,
       savedFilePaths,
       new Date(),
-      extractedText
+      extractedText,
+      undefined,
+      undefined,
+      request.userId
     );
 
     // 4. Synthesize native text-to-speech audio using Gemini voice generation adapter
@@ -123,7 +130,7 @@ export class DocumentService implements ReadDocumentUseCase, ExplainTextUseCase,
 
     // 5. Persist document metadata using Storage Adapter
     try {
-        await this.storagePort.saveDocument(document);
+        await this.storagePort.saveDocument(request.userId, document);
     } catch (e) {
         throw new StorageError(`Failed to save document metadata: ${(e as Error).message}`);
     }
@@ -138,7 +145,7 @@ export class DocumentService implements ReadDocumentUseCase, ExplainTextUseCase,
   public async executeExplanation(request: ExplainTextRequest): Promise<Document> {
     let document: Document | null;
     try {
-        document = await this.storagePort.getDocumentById(request.documentId);
+        document = await this.storagePort.getDocumentById(request.userId, request.documentId);
     } catch (e) {
         throw new StorageError(`Failed to fetch document metadata: ${(e as Error).message}`);
     }
@@ -173,7 +180,7 @@ export class DocumentService implements ReadDocumentUseCase, ExplainTextUseCase,
 
     // Cache/write changes to storage
     try {
-        await this.storagePort.saveDocument(document);
+        await this.storagePort.saveDocument(request.userId, document);
     } catch (e) {
         throw new StorageError(`Failed to save document metadata: ${(e as Error).message}`);
     }
@@ -187,26 +194,26 @@ export class DocumentService implements ReadDocumentUseCase, ExplainTextUseCase,
   }
 
   // Realize GetDocumentUseCase details
-  public async getById(id: string): Promise<Document | null> {
+  public async getById(userId: string, id: string): Promise<Document | null> {
     try {
-        return await this.storagePort.getDocumentById(id);
+        return await this.storagePort.getDocumentById(userId, id);
     } catch (e) {
         throw new StorageError(`Failed to fetch document metadata: ${(e as Error).message}`);
     }
   }
 
-  public async getAll(): Promise<Document[]> {
+  public async getAll(userId: string): Promise<Document[]> {
     try {
-        return await this.storagePort.getAllDocuments();
+        return await this.storagePort.getAllDocuments(userId);
     } catch (e) {
         throw new StorageError(`Failed to fetch document metadata: ${(e as Error).message}`);
     }
   }
 
-  public async delete(id: string): Promise<void> {
+  public async delete(userId: string, id: string): Promise<void> {
     // Also delete metadata via the storage adaptation
     try {
-        await this.storagePort.deleteDocument(id);
+        await this.storagePort.deleteDocument(userId, id);
     } catch (e) {
         throw new StorageError(`Failed to delete document metadata: ${(e as Error).message}`);
     }

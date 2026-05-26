@@ -6,6 +6,17 @@ export class RateLimiter {
   constructor(maxRequests: number, windowMs: number = 60000) {
     this.maxRequests = maxRequests;
     this.windowMs = windowMs;
+    // Prevent memory leaks by periodically clearing the map
+    setInterval(() => this.clearMemory(), Math.max(windowMs, 60000)).unref();
+  }
+
+  private clearMemory() {
+    const now = Date.now();
+    for (const [key, record] of this.map.entries()) {
+      if (now - record.windowStart > this.windowMs) {
+        this.map.delete(key);
+      }
+    }
   }
 
   public checkLimit(clientId: string): boolean {

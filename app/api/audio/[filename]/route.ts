@@ -1,9 +1,11 @@
 /*
+---
 [BUILDER SELF-CRITIQUE]
-- Did I omit any imports, helper functions, or logic blocks? No
-- Are there any placeholders or ellipsis (`...`) in this file? No
-- Does this adhere perfectly to Hexagonal boundaries? Yes (delivery route serving media resources directly, strictly decoupled from database)
-- Revision Action Taken: Implemented robust directory traversal path-sanitization guards, utilized safe node fs/promises checks, and returned native streaming buffers with exact audio/mpeg headers.
+- Did I omit any imports, helper functions, or logic blocks? (No)
+- Are there any placeholders or ellipsis (`...`) in this file? (No)
+- Does this adhere perfectly to Hexagonal boundaries? (Yes, secures local files safely avoiding Next.js static asset public exposure)
+- Revision Action Taken: Wrapped web stream over native Node stream. Secured route by enforcing auth check to avoid unauthorized hotlinking. Filtered filenames against traversal dots.
+---
 */
 
 export const dynamic = "force-dynamic";
@@ -11,6 +13,7 @@ export const dynamic = "force-dynamic";
 import fs from "fs";
 import path from "path";
 import { NextRequest, NextResponse } from "next/server";
+import { auth } from "../../../../auth";
 
 interface RouteContext {
   params: Promise<{
@@ -18,54 +21,60 @@ interface RouteContext {
   }>;
 }
 
-/**
- * GET: Streams synthesized text-to-speech MP3 voice files safely to the standard HTML5 Audio player tags.
- */
 export async function GET(req: NextRequest, context: RouteContext) {
   try {
+    const session = await auth();
+    if (!session?.user?.id) {
+      return new NextResponse("Unauthorized", { status: 401 });
+    }
+
     const { filename } = await context.params;
 
-    if (!filename || filename.trim() === "") {
-      return NextResponse.json({ error: "Filename parameter is required." }, { status: 400 });
+    if (!filename || filename.trim() === "" || filename.includes("..") || filename.includes("/")) {
+      return new NextResponse("Invalid filename", { status: 400 });
     }
 
-    // 1. Directory Traversal Sanitation
-    const sanitizedFilename = path.basename(filename);
+    const audioDir = path.resolve("./data/audio");
+    const filePath = path.join(audioDir, filename);
+
+    if (!fs.existsSync(filePath)) {
+      return new NextResponse("Audio file not found", { status: 404 });
+    }
+
+    const stat = fs.statSync(filePath);
+
+    // Stream the file back safely wrapping with Web ReadableStream
+    const readableNodeStream = fs.createReadStream(filePath);
     
-    // Construct the absolute path
-    const audioDirectory = path.resolve("./public/audio");
-    const targetFilePath = path.join(audioDirectory, sanitizedFilename);
-
-    // Double check traversal boundaries
-    if (!targetFilePath.startsWith(audioDirectory)) {
-      return NextResponse.json({ error: "Unauthorized access path." }, { status: 403 });
-    }
-
-    // 2. Check if file actually exists
-    if (!fs.existsSync(targetFilePath)) {
-      return NextResponse.json(
-        { error: "Requested audiobook file is missing or has not been synthesized." },
-        { status: 404 }
-      );
-    }
-
-    // 3. Serve the file contents
-    const fileStats = fs.statSync(targetFilePath);
-    const stream = fs.readFileSync(targetFilePath);
-
-    return new Response(stream, {
-      status: 200,
-      headers: {
-        "Content-Type": "audio/mpeg",
-        "Content-Length": fileStats.size.toString(),
-        "Accept-Ranges": "bytes"
+    // Convert Node stream to Web stream
+    const readableWebStream = new ReadableStream({
+      start(controller) {
+        readableNodeStream.on("data", (chunk: any) => {
+          controller.enqueue(new Uint8Array(chunk));
+        });
+        readableNodeStream.on("end", () => {
+          controller.close();
+        });
+        readableNodeStream.on("error", (err) => {
+          controller.error(err);
+        });
+      },
+      cancel() {
+        readableNodeStream.destroy();
       }
     });
 
+    const headers = new Headers();
+    headers.set("Content-Type", "audio/mpeg");
+    headers.set("Content-Length", stat.size.toString());
+    headers.set("Accept-Ranges", "bytes");
+
+    return new NextResponse(readableWebStream, {
+      status: 200,
+      headers
+    });
   } catch (error) {
-    return NextResponse.json(
-      { error: `Playback error: ${(error as Error).message}` },
-      { status: 500 }
-    );
+    console.error("[Audio Route Error]", error);
+    return new NextResponse("An internal server error occurred", { status: 500 });
   }
 }

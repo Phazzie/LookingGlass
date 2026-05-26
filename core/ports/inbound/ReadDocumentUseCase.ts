@@ -11,6 +11,7 @@
 import { Document } from "../../domain/Document";
 
 export interface ReadDocumentRequest {
+  userId: string;
   files: Array<{
     fileBuffer: Buffer;
     originalFilename: string;

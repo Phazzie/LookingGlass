@@ -3,8 +3,8 @@
 [BUILDER SELF-CRITIQUE]
 - Did I omit any imports, helper functions, or logic blocks? (No)
 - Are there any placeholders or ellipsis (`...`) in this file? (No)
-- Does this adhere perfectly to Hexagonal boundaries? (Yes - Intercepts HTTP request contexts mapping strict validation prior to internal execution).
-- Revision Action Taken: Plumbed in precise IP-level rate limiting, robust application error parsing, and structured generic failure fallback guarding internal mechanisms from client leakage.
+- Does this adhere perfectly to Hexagonal boundaries? (Yes)
+- Revision Action Taken: Appended auth check, returned generic server errors for the client, extracted session userId for multi-tenant id-filtering compliance. Fixed x-forwarded-for rate limit parsing.
 ---
 */
 
@@ -14,6 +14,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { documentService, serializeDocument } from "../../../../../core/di";
 import { explainRateLimiter } from "../../../../../core/utils/RateLimiter";
 import { AppError } from "../../../../../core/errors/AppErrors";
+import { auth } from "../../../../../auth";
 
 interface RouteContext {
   params: Promise<{
@@ -21,13 +22,15 @@ interface RouteContext {
   }>;
 }
 
-/**
- * POST: Invokes explanation logic representing the Wise Caterpillar's advice.
- * Unpacks academic texts, structures terms in a glossary, and performs caching.
- */
 export async function POST(req: NextRequest, context: RouteContext) {
   try {
-    const ip = req.headers.get("x-forwarded-for") || "unknown_ip";
+    const session = await auth();
+    if (!session?.user?.id) {
+      return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
+    }
+
+    const forwardedFor = req.headers.get("x-forwarded-for");
+    const ip = forwardedFor ? forwardedFor.split(',')[0].trim() : "unknown_ip";
     if (!explainRateLimiter.checkLimit(ip)) {
       return NextResponse.json(
         { success: false, error: "The Caterpillar is overwhelmed. Please wait before asking for more advice." },
@@ -52,6 +55,7 @@ export async function POST(req: NextRequest, context: RouteContext) {
     }
 
     const document = await documentService.execute({
+      userId: session.user.id,
       documentId: id,
       focusTimeMinutes
     });
@@ -60,16 +64,15 @@ export async function POST(req: NextRequest, context: RouteContext) {
 
     return NextResponse.json(serialized, { status: 200 });
   } catch (error) {
+    console.error("[Explanation Route Error]", error);
+
     if (error instanceof AppError) {
       return NextResponse.json(
-        { success: false, error: error.message },
+        { success: false, error: "Validation Error. Please check parameters." },
         { status: error.httpStatusCode }
       );
     }
     
-    // Log unknown unhandled errors safely behind the server boundaries
-    console.error("[Explanation Route Error]", error);
-
     return NextResponse.json(
       { success: false, error: "A mysterious anomaly occurred in Wonderland." },
       { status: 500 }

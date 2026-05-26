@@ -19,6 +19,7 @@ export class Document {
   private _audioUrl: string | undefined;
   private readonly _createdAt: Date;
   private _explanation: CaterpillarsAdvice | undefined;
+  private readonly _userId: string;
 
   constructor(
     id: string,
@@ -28,7 +29,8 @@ export class Document {
     createdAt: Date,
     extractedText?: string,
     audioUrl?: string,
-    explanation?: CaterpillarsAdvice
+    explanation?: CaterpillarsAdvice,
+    userId: string = "default"
   ) {
     if (!id || id.trim() === "") {
       throw new Error("Document ID cannot be empty.");
@@ -64,11 +66,16 @@ export class Document {
     this._extractedText = extractedText ? extractedText.trim() : undefined;
     this._audioUrl = audioUrl ? audioUrl.trim() : undefined;
     this._explanation = explanation;
+    this._userId = userId;
   }
 
   // Strongly typed getters for all properties
   public get id(): string {
     return this._id;
+  }
+
+  public get userId(): string {
+    return this._userId;
   }
 
   public get title(): string {

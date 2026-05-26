@@ -9,7 +9,7 @@
 import { Document } from "../../domain/Document";
 
 export interface GetDocumentUseCase {
-  getById(id: string): Promise<Document | null>;
-  getAll(): Promise<Document[]>;
-  delete(id: string): Promise<void>;
+  getById(userId: string, id: string): Promise<Document | null>;
+  getAll(userId: string): Promise<Document[]>;
+  delete(userId: string, id: string): Promise<void>;
 }
