@@ -1,15 +1,17 @@
-import { pgTable, text, timestamp, varchar, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, jsonb } from "drizzle-orm/pg-core";
 
 export const documents = pgTable("documents", {
-  id: varchar("id", { length: 255 }).primaryKey(),
-  userId: varchar("user_id", { length: 255 }).notNull(),
-  title: varchar("title", { length: 255 }).notNull(),
+  id: text("id").primaryKey(),
+  userId: text("user_id").notNull(),
+  title: text("title").notNull(),
   originalFilenames: text("original_filenames").array().notNull(),
   filePaths: text("file_paths").array().notNull(),
-  extractedText: text("extracted_text").notNull(),
+  extractedText: text("extracted_text"),
   audioUrl: text("audio_url"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   explanationText: text("explanation_text"),
-  glossary: jsonb("glossary"), // Array of { term: string, definition: string }
-  focusSessionScript: jsonb("focus_session_script"), // Array of { speaker: string, text: string }
-  createdAt: timestamp("created_at").defaultNow().notNull(),
+  glossary: jsonb("glossary").$type<Array<{ term: string; definition: string }>>(),
+  focusSessionScript: jsonb("focus_session_script").$type<
+    Array<{ speaker: "Narrator" | "Alice"; text: string }>
+  >(),
 });

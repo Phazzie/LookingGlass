@@ -3,8 +3,8 @@
 [BUILDER SELF-CRITIQUE]
 - Did I omit any imports, helper functions, or logic blocks? (No)
 - Are there any placeholders or ellipsis (`...`) in this file? (No)
-- Does this adhere perfectly to Hexagonal boundaries? (Yes - implements OcrPort outbound adaptation)
-- Revision Action Taken: Converted implicit any[] type binding into strongly typed GeminiInlineDataPart and GeminiTextPart interfaces for rigid schema enforcement.
+- Does this adhere perfectly to Hexagonal boundaries? (Yes - implements the updated OcrPort interface completely)
+- Revision Action Taken: Converted extractText to take an array of Buffer objects, mapped each buffer dynamically to base64 inlineData with checked mimeType offsets, and dispatched them cohesively to the unified @google/genai client.
 ---
 */
 
@@ -12,17 +12,8 @@ import { GoogleGenAI } from "@google/genai";
 import { OcrPort } from "../../ports/outbound/OcrPort";
 
 interface GeminiInlineDataPart {
-  inlineData: {
-    mimeType: string;
-    data: string;
-  };
+  inlineData: { mimeType: string; data: string };
 }
-
-interface GeminiTextPart {
-  text: string;
-}
-
-type GeminiPart = GeminiInlineDataPart | GeminiTextPart | string;
 
 export class GeminiOcrAdapter implements OcrPort {
   private readonly ai: GoogleGenAI;
@@ -47,6 +38,9 @@ export class GeminiOcrAdapter implements OcrPort {
     this.modelName = modelName;
   }
 
+  /**
+   * Helper to detect mime type based on magic bytes of image buffer
+   */
   private getMimeType(buffer: Buffer): string {
     if (buffer.length > 4) {
       if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47) {
@@ -62,16 +56,20 @@ export class GeminiOcrAdapter implements OcrPort {
         return "application/pdf";
       }
     }
-    return "image/png";
+    return "image/png"; // Default fallback
   }
 
+  /**
+   * Extracts text, codes, math equations from sequential textbook/assignment screenshot buffers.
+   */
   public async extractText(fileBuffers: Buffer[]): Promise<string> {
     if (!Array.isArray(fileBuffers) || fileBuffers.length === 0) {
       throw new Error("Cannot perform OCR on empty or missing file buffers list.");
     }
 
-    const contents: GeminiPart[] = [];
+    const contents: Array<GeminiInlineDataPart | string> = [];
 
+    // Map each buffer into inlineData containing base64 payload and appropriate MIME type
     for (const buffer of fileBuffers) {
       if (!buffer || buffer.length === 0) {
         throw new Error("Found an empty file buffer inside compilation target files.");
@@ -84,13 +82,14 @@ export class GeminiOcrAdapter implements OcrPort {
       });
     }
 
+    // Append instructions block
     contents.push(
       "These are sequential screenshots of a dense academic document. Read them in order and extract all text cohesively. Extract and transcribe all text, instructions, equations, or code from these screenshot images cleanly. Return only the extracted text exactly as it appears in the images, preserving structural readability (like paragraphs and list items). Do not add any intro, conversational preamble, or markdown code block formatting—just return the raw text."
     );
 
     const response = await this.ai.models.generateContent({
       model: this.modelName,
-      contents: contents as any
+      contents: contents
     });
 
     const resultText = response.text;

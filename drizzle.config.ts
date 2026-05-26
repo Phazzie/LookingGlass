@@ -1,14 +1,10 @@
-import { defineConfig } from "drizzle-kit";
+import type { Config } from "drizzle-kit";
 
-if (!process.env.DATABASE_URL) {
-  throw new Error("DATABASE_URL is missing from environment. Drizzle cannot generate migrations.");
-}
-
-export default defineConfig({
+export default {
   schema: "./db/schema.ts",
-  out: "./drizzle",
+  out: "./db/migrations",
   dialect: "postgresql",
   dbCredentials: {
-    url: process.env.DATABASE_URL,
+    url: process.env.DATABASE_URL!,
   },
-});
+} satisfies Config;
