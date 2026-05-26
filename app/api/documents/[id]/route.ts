@@ -6,6 +6,8 @@
 - Revision Action Taken: Properly declared types for Next.js 15 asynchronous dynamic routing params, awaited them, and mapped responses using serialization structures.
 */
 
+export const dynamic = "force-dynamic";
+
 import { NextRequest, NextResponse } from "next/server";
 import { documentService, serializeDocument } from "../../../../core/di";
 

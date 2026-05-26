@@ -4,7 +4,7 @@
 - Did I omit any imports, helper functions, or logic blocks? (No)
 - Are there any placeholders or ellipsis (`...`) in this file? (No)
 - Does this adhere perfectly to Hexagonal boundaries? (Yes - represents the pure orchestration domain service boundary)
-- Revision Action Taken: Converted executeReadDocument to extract multiple files, save them collectively via storage saveFiles, invoke OCR in batch, and instantiate the updated multi-screenshot Document domain model.
+- Revision Action Taken: Wrapped port method executions in robust try/catch blocks translating framework exceptions into strongly typed AppErrors for cross-boundary delivery constraints.
 ---
 */
 
@@ -19,6 +19,8 @@ import { ExplanationPort } from "../ports/outbound/ExplanationPort";
 import { ReadDocumentUseCase, ReadDocumentRequest } from "../ports/inbound/ReadDocumentUseCase";
 import { ExplainTextUseCase, ExplainTextRequest } from "../ports/inbound/ExplainTextUseCase";
 import { GetDocumentUseCase } from "../ports/inbound/GetDocumentUseCase";
+
+import { AppError, ValidationError, NotFoundError, ExternalApiError, RateLimitError, StorageError } from "../errors/AppErrors";
 
 export class DocumentService implements ReadDocumentUseCase, ExplainTextUseCase, GetDocumentUseCase {
   private readonly ocrPort: OcrPort;
@@ -55,7 +57,7 @@ export class DocumentService implements ReadDocumentUseCase, ExplainTextUseCase,
    */
   private async executeReadDocument(request: ReadDocumentRequest): Promise<Document> {
     if (!request.files || request.files.length === 0) {
-      throw new Error("No textbook screenshots uploaded for processing.");
+        throw new ValidationError("No textbook screenshots uploaded for processing.");
     }
 
     const documentId = `doc_${Date.now()}`;
@@ -73,14 +75,24 @@ export class DocumentService implements ReadDocumentUseCase, ExplainTextUseCase,
     const savedFilenames = filesToSave.map(file => file.fileName);
 
     // Save all binary file buffers via Storage Adapter
-    const savedFilePaths = await this.storagePort.saveFiles(filesToSave);
+    let savedFilePaths: string[];
+    try {
+        savedFilePaths = await this.storagePort.saveFiles(filesToSave);
+    } catch (e) {
+        throw new StorageError(`Failed to save document images: ${(e as Error).message}`);
+    }
 
     // 2. Extract academic text across all buffers sequentially utilizing Gemini multimodal vision prompt
     const buffersToOcr = request.files.map(file => file.fileBuffer);
-    const extractedText = await this.ocrPort.extractText(buffersToOcr);
+    let extractedText: string;
+    try {
+        extractedText = await this.ocrPort.extractText(buffersToOcr);
+    } catch (e) {
+        throw new ExternalApiError(`The Caterpillar's hookah is out of smoke right now. The AI service failed: ${(e as Error).message}`);
+    }
 
     if (!extractedText || extractedText.trim() === "") {
-      throw new Error("Unable to extract any text from the provided textbook page screenshots.");
+        throw new ValidationError("Unable to extract any text from the provided textbook page screenshots.");
     }
 
     // Determine readable document title based off of first page file name
@@ -100,13 +112,21 @@ export class DocumentService implements ReadDocumentUseCase, ExplainTextUseCase,
 
     // 4. Synthesize native text-to-speech audio using Gemini voice generation adapter
     const audioFilename = `${documentId}.mp3`;
-    await this.ttsPort.synthesizeSpeech(extractedText, audioFilename);
+    try {
+        await this.ttsPort.synthesizeSpeech(extractedText, audioFilename);
+    } catch (e) {
+        throw new ExternalApiError(`The Caterpillar's hookah is out of smoke right now. The AI service failed: ${(e as Error).message}`);
+    }
 
     // Point the public API url to the route we will expose
     document.setAudioUrl(`/api/audio/${audioFilename}`);
 
     // 5. Persist document metadata using Storage Adapter
-    await this.storagePort.saveDocument(document);
+    try {
+        await this.storagePort.saveDocument(document);
+    } catch (e) {
+        throw new StorageError(`Failed to save document metadata: ${(e as Error).message}`);
+    }
 
     return document;
   }
@@ -116,9 +136,15 @@ export class DocumentService implements ReadDocumentUseCase, ExplainTextUseCase,
    * This handles translating academic texts with a glossary and caching existing advice.
    */
   public async executeExplanation(request: ExplainTextRequest): Promise<Document> {
-    const document = await this.storagePort.getDocumentById(request.documentId);
+    let document: Document | null;
+    try {
+        document = await this.storagePort.getDocumentById(request.documentId);
+    } catch (e) {
+        throw new StorageError(`Failed to fetch document metadata: ${(e as Error).message}`);
+    }
+
     if (!document) {
-      throw new Error(`Document with ID ${request.documentId} does not exist in our library.`);
+      throw new NotFoundError(`Document with ID ${request.documentId} does not exist in our library.`);
     }
 
     // Cache lookup: If explanation advice is already present AND no specific focusTimeMinutes requested, return it immediately
@@ -128,20 +154,29 @@ export class DocumentService implements ReadDocumentUseCase, ExplainTextUseCase,
 
     const textToExplain = document.extractedText;
     if (!textToExplain || textToExplain.trim() === "") {
-      throw new Error("Cannot consult the Caterpillar on an empty document text.");
+        throw new ValidationError("Cannot consult the Caterpillar on an empty document text.");
     }
 
     // Query explanation adapter with optional focus pacing configuration parameter
-    const caterpillarsAdvice = await this.explanationPort.generateExplanation(
-      textToExplain,
-      request.focusTimeMinutes
-    );
+    let caterpillarsAdvice: CaterpillarsAdvice;
+    try {
+        caterpillarsAdvice = await this.explanationPort.generateExplanation(
+          textToExplain,
+          request.focusTimeMinutes
+        );
+    } catch (e) {
+        throw new ExternalApiError(`The Caterpillar's hookah is out of smoke right now. The AI service failed: ${(e as Error).message}`);
+    }
 
     // Attach domain entity
     document.setExplanation(caterpillarsAdvice);
 
     // Cache/write changes to storage
-    await this.storagePort.saveDocument(document);
+    try {
+        await this.storagePort.saveDocument(document);
+    } catch (e) {
+        throw new StorageError(`Failed to save document metadata: ${(e as Error).message}`);
+    }
 
     return document;
   }
@@ -153,15 +188,27 @@ export class DocumentService implements ReadDocumentUseCase, ExplainTextUseCase,
 
   // Realize GetDocumentUseCase details
   public async getById(id: string): Promise<Document | null> {
-    return await this.storagePort.getDocumentById(id);
+    try {
+        return await this.storagePort.getDocumentById(id);
+    } catch (e) {
+        throw new StorageError(`Failed to fetch document metadata: ${(e as Error).message}`);
+    }
   }
 
   public async getAll(): Promise<Document[]> {
-    return await this.storagePort.getAllDocuments();
+    try {
+        return await this.storagePort.getAllDocuments();
+    } catch (e) {
+        throw new StorageError(`Failed to fetch document metadata: ${(e as Error).message}`);
+    }
   }
 
   public async delete(id: string): Promise<void> {
     // Also delete metadata via the storage adaptation
-    await this.storagePort.deleteDocument(id);
+    try {
+        await this.storagePort.deleteDocument(id);
+    } catch (e) {
+        throw new StorageError(`Failed to delete document metadata: ${(e as Error).message}`);
+    }
   }
 }

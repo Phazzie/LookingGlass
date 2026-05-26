@@ -6,6 +6,8 @@
 - Revision Action Taken: Implemented robust directory traversal path-sanitization guards, utilized safe node fs/promises checks, and returned native streaming buffers with exact audio/mpeg headers.
 */
 
+export const dynamic = "force-dynamic";
+
 import fs from "fs";
 import path from "path";
 import { NextRequest, NextResponse } from "next/server";

@@ -3,13 +3,17 @@
 [BUILDER SELF-CRITIQUE]
 - Did I omit any imports, helper functions, or logic blocks? (No)
 - Are there any placeholders or ellipsis (`...`) in this file? (No)
-- Does this adhere perfectly to Hexagonal boundaries? (Yes - Delivery adapter translating HTTP payload parameters to inward use cases)
-- Revision Action Taken: Upgraded the POST handler to check the JSON request body for 'focusTimeMinutes' parameter, translating details seamlessly to the DocumentService execute call.
+- Does this adhere perfectly to Hexagonal boundaries? (Yes - Intercepts HTTP request contexts mapping strict validation prior to internal execution).
+- Revision Action Taken: Plumbed in precise IP-level rate limiting, robust application error parsing, and structured generic failure fallback guarding internal mechanisms from client leakage.
 ---
 */
 
+export const dynamic = "force-dynamic";
+
 import { NextRequest, NextResponse } from "next/server";
 import { documentService, serializeDocument } from "../../../../../core/di";
+import { explainRateLimiter } from "../../../../../core/utils/RateLimiter";
+import { AppError } from "../../../../../core/errors/AppErrors";
 
 interface RouteContext {
   params: Promise<{
@@ -23,10 +27,18 @@ interface RouteContext {
  */
 export async function POST(req: NextRequest, context: RouteContext) {
   try {
+    const ip = req.headers.get("x-forwarded-for") || "unknown_ip";
+    if (!explainRateLimiter.checkLimit(ip)) {
+      return NextResponse.json(
+        { success: false, error: "The Caterpillar is overwhelmed. Please wait before asking for more advice." },
+        { status: 429 }
+      );
+    }
+
     const { id } = await context.params;
 
     if (!id || id.trim() === "") {
-      return NextResponse.json({ error: "Document ID parameter is required." }, { status: 400 });
+      return NextResponse.json({ success: false, error: "Document ID parameter is required." }, { status: 400 });
     }
 
     let focusTimeMinutes: number | undefined = undefined;
@@ -48,8 +60,18 @@ export async function POST(req: NextRequest, context: RouteContext) {
 
     return NextResponse.json(serialized, { status: 200 });
   } catch (error) {
+    if (error instanceof AppError) {
+      return NextResponse.json(
+        { success: false, error: error.message },
+        { status: error.httpStatusCode }
+      );
+    }
+    
+    // Log unknown unhandled errors safely behind the server boundaries
+    console.error("[Explanation Route Error]", error);
+
     return NextResponse.json(
-      { error: `The Wise Caterpillar met with a distraction: ${(error as Error).message}` },
+      { success: false, error: "A mysterious anomaly occurred in Wonderland." },
       { status: 500 }
     );
   }
