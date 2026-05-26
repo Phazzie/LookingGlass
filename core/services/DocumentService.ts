@@ -10,6 +10,14 @@ import { ReadDocumentUseCase, ReadDocumentRequest } from "../ports/inbound/ReadD
 import { ExplainTextUseCase, ExplainTextRequest } from "../ports/inbound/ExplainTextUseCase";
 import { GetDocumentUseCase } from "../ports/inbound/GetDocumentUseCase";
 
+import {
+  ValidationError,
+  NotFoundError,
+  ExternalApiError,
+  StorageError,
+  AppError,
+} from "../errors/AppErrors";
+
 const ALLOWED_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp"]);
 
 export class DocumentService implements ReadDocumentUseCase, ExplainTextUseCase, GetDocumentUseCase {
@@ -62,13 +70,25 @@ export class DocumentService implements ReadDocumentUseCase, ExplainTextUseCase,
     });
 
     const savedFilenames = filesToSave.map((f) => f.fileName);
-    const savedFilePaths = await this.storagePort.saveFiles(filesToSave);
+    let savedFilePaths: string[];
+    try {
+      savedFilePaths = await this.storagePort.saveFiles(filesToSave);
+    } catch (err) {
+      if (err instanceof AppError) throw err;
+      throw new StorageError(`Failed to save uploaded files: ${(err as Error).message}`);
+    }
 
-    const buffersToOcr = request.files.map((file) => file.fileBuffer);
-    const extractedText = await this.ocrPort.extractText(buffersToOcr);
+    let extractedText: string;
+    try {
+      const buffersToOcr = request.files.map((file) => file.fileBuffer);
+      extractedText = await this.ocrPort.extractText(buffersToOcr);
+    } catch (err) {
+      if (err instanceof AppError) throw err;
+      throw new ExternalApiError(`OCR service failed: ${(err as Error).message}`);
+    }
 
     if (!extractedText || extractedText.trim() === "") {
-      throw new Error("Unable to extract any text from the provided textbook page screenshots.");
+      throw new ValidationError("Unable to extract any text from the provided textbook page screenshots.");
     }
 
     const firstFilename = request.files[0].originalFilename;
@@ -91,17 +111,34 @@ export class DocumentService implements ReadDocumentUseCase, ExplainTextUseCase,
     );
 
     const audioFilename = `${documentId}.mp3`;
-    await this.ttsPort.synthesizeSpeech(extractedText, audioFilename);
+    try {
+      await this.ttsPort.synthesizeSpeech(extractedText, audioFilename);
+    } catch (err) {
+      if (err instanceof AppError) throw err;
+      throw new ExternalApiError(`TTS service failed: ${(err as Error).message}`);
+    }
     document.setAudioUrl(`/api/audio/${audioFilename}`);
 
-    await this.storagePort.saveDocument(document);
+    try {
+      await this.storagePort.saveDocument(document);
+    } catch (err) {
+      if (err instanceof AppError) throw err;
+      throw new StorageError(`Failed to persist document: ${(err as Error).message}`);
+    }
     return document;
   }
 
   public async executeExplanation(request: ExplainTextRequest): Promise<Document> {
-    const document = await this.storagePort.getDocumentById(request.documentId, request.userId);
+    let document: Document | null;
+    try {
+      document = await this.storagePort.getDocumentById(request.documentId, request.userId);
+    } catch (err) {
+      if (err instanceof AppError) throw err;
+      throw new StorageError(`Failed to retrieve document: ${(err as Error).message}`);
+    }
+
     if (!document) {
-      throw new Error(`Document with ID ${request.documentId} does not exist in our library.`);
+      throw new NotFoundError(`Document with ID ${request.documentId} does not exist in our library.`);
     }
 
     if (document.hasExplanation() && request.focusTimeMinutes === undefined) {
@@ -110,16 +147,27 @@ export class DocumentService implements ReadDocumentUseCase, ExplainTextUseCase,
 
     const textToExplain = document.extractedText;
     if (!textToExplain || textToExplain.trim() === "") {
-      throw new Error("Cannot consult the Caterpillar on an empty document text.");
+      throw new ValidationError("Cannot consult the Caterpillar on an empty document text.");
     }
 
-    const caterpillarsAdvice = await this.explanationPort.generateExplanation(
-      textToExplain,
-      request.focusTimeMinutes
-    );
+    let caterpillarsAdvice;
+    try {
+      caterpillarsAdvice = await this.explanationPort.generateExplanation(
+        textToExplain,
+        request.focusTimeMinutes
+      );
+    } catch (err) {
+      if (err instanceof AppError) throw err;
+      throw new ExternalApiError(`Explanation service failed: ${(err as Error).message}`);
+    }
 
     document.setExplanation(caterpillarsAdvice);
-    await this.storagePort.saveDocument(document);
+    try {
+      await this.storagePort.saveDocument(document);
+    } catch (err) {
+      if (err instanceof AppError) throw err;
+      throw new StorageError(`Failed to persist explanation: ${(err as Error).message}`);
+    }
     return document;
   }
 

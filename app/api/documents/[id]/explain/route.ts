@@ -1,9 +1,19 @@
+export const dynamic = "force-dynamic";
+
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "../../../../../auth";
 import { documentService, serializeDocument } from "../../../../../core/di";
+import { explainRateLimiter } from "../../../../../core/utils/RateLimiter";
+import { AppError } from "../../../../../core/errors/AppErrors";
 
 interface RouteContext {
   params: Promise<{ id: string }>;
+}
+
+function getClientIp(req: NextRequest): string {
+  const xff = req.headers.get("x-forwarded-for") ?? "";
+  const ips = xff.split(",").map((s) => s.trim()).filter(Boolean);
+  return ips[ips.length - 1] || req.headers.get("x-real-ip") || "unknown";
 }
 
 export async function POST(req: NextRequest, context: RouteContext) {
@@ -12,6 +22,8 @@ export async function POST(req: NextRequest, context: RouteContext) {
     if (!session?.user?.id) {
       return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
     }
+
+    explainRateLimiter.check(getClientIp(req));
 
     const { id } = await context.params;
     if (!id || id.trim() === "") {
@@ -37,6 +49,9 @@ export async function POST(req: NextRequest, context: RouteContext) {
     return NextResponse.json(serializeDocument(document), { status: 200 });
   } catch (error) {
     console.error("[POST /api/documents/[id]/explain]", error);
+    if (error instanceof AppError) {
+      return NextResponse.json({ error: error.message }, { status: error.httpStatusCode });
+    }
     return NextResponse.json({ error: "The Wise Caterpillar met with a distraction." }, { status: 500 });
   }
 }

@@ -1,41 +1,48 @@
+import { RateLimitError } from "../errors/AppErrors";
+
+interface RateLimitRecord {
+  count: number;
+  windowStart: number;
+}
+
 export class RateLimiter {
-  private map = new Map<string, { count: number; windowStart: number }>();
+  private readonly map = new Map<string, RateLimitRecord>();
   private readonly maxRequests: number;
   private readonly windowMs: number;
 
-  constructor(maxRequests: number, windowMs: number = 60000) {
+  constructor(maxRequests: number, windowMs: number) {
     this.maxRequests = maxRequests;
     this.windowMs = windowMs;
-    // Prevent memory leaks by periodically clearing the map
-    setInterval(() => this.clearMemory(), Math.max(windowMs, 60000)).unref();
-  }
-
-  private clearMemory() {
-    const now = Date.now();
-    for (const [key, record] of this.map.entries()) {
-      if (now - record.windowStart > this.windowMs) {
-        this.map.delete(key);
+    // Evict expired entries periodically
+    setInterval(() => {
+      const now = Date.now();
+      for (const [key, record] of this.map.entries()) {
+        if (now - record.windowStart > this.windowMs) this.map.delete(key);
       }
-    }
+    }, this.windowMs);
   }
 
-  public checkLimit(clientId: string): boolean {
+  check(clientId: string): void {
     const now = Date.now();
     const record = this.map.get(clientId);
-
     if (!record || now - record.windowStart > this.windowMs) {
       this.map.set(clientId, { count: 1, windowStart: now });
-      return true;
+      return;
     }
-
     if (record.count >= this.maxRequests) {
-      return false;
+      throw new RateLimitError(
+        "Too many requests. Please wait before trying again."
+      );
     }
-
     record.count += 1;
-    return true;
+  }
+
+  /** Exposed for testing only — resets all state. */
+  reset(): void {
+    this.map.clear();
   }
 }
 
-export const explainRateLimiter = new RateLimiter(5, 60000); // 5 per minute
-export const uploadRateLimiter = new RateLimiter(10, 60000); // 10 per minute
+// Singletons — one per concern
+export const uploadRateLimiter = new RateLimiter(10, 60 * 1000);
+export const explainRateLimiter = new RateLimiter(5, 60 * 1000);

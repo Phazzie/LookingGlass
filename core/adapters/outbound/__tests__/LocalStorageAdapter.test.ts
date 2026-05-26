@@ -1,112 +1,200 @@
-/*
----
-[BUILDER SELF-CRITIQUE]
-- Did I omit any imports, helper functions, or logic blocks? (No)
-- Are there any placeholders or ellipsis (`...`) in this file? (No)
-- Does this adhere perfectly to Hexagonal boundaries? (Yes - confirms proper serialized persistence to outward file system port)
-- Revision Action Taken: Pointed the constructor strictly at a temporary ./test-data directory, completely isolating production DB stores, and performed explicit recursive cleanup on afterAll hook to maintain clean test environments.
----
-*/
-
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "fs";
 import path from "path";
+import os from "os";
 import { LocalStorageAdapter } from "../LocalStorageAdapter";
 import { Document } from "../../../domain/Document";
 import { CaterpillarsAdvice } from "../../../domain/CaterpillarsAdvice";
 
-describe("LocalStorageAdapter Integration Tests", () => {
-  const TEST_DIR = path.join(process.cwd(), "test-data");
-  const DB_PATH = path.join(TEST_DIR, "db.json");
-  const UPLOAD_DIR = path.join(TEST_DIR, "uploads");
+const USER_ID = "user-abc";
 
+function makeAdapter(tmpDir: string): LocalStorageAdapter {
+  return new LocalStorageAdapter(
+    path.join(tmpDir, "db.json"),
+    path.join(tmpDir, "uploads"),
+    path.join(tmpDir, "audio")
+  );
+}
+
+function makeDocument(id = "doc-1", userId = USER_ID): Document {
+  return new Document(
+    id,
+    "Test Title",
+    ["page1.png"],
+    ["/tmp/page1.png"],
+    new Date("2024-01-01T00:00:00.000Z"),
+    "Extracted text here.",
+    undefined,
+    undefined,
+    userId
+  );
+}
+
+describe("LocalStorageAdapter", () => {
+  let tmpDir: string;
   let adapter: LocalStorageAdapter;
 
-  beforeAll(() => {
-    // Clean up any lingering prior states
-    if (fs.existsSync(TEST_DIR)) {
-      fs.rmSync(TEST_DIR, { recursive: true, force: true });
-    }
-    
-    // Instantiate adapter, mapping to the new mock folders
-    adapter = new LocalStorageAdapter(DB_PATH, UPLOAD_DIR);
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "looking-glass-test-"));
+    adapter = makeAdapter(tmpDir);
   });
 
-  afterAll(() => {
-    // Purge the temporary testing directory 
-    if (fs.existsSync(TEST_DIR)) {
-      fs.rmSync(TEST_DIR, { recursive: true, force: true });
-    }
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("should initialize database files correctly", () => {
-    expect(fs.existsSync(DB_PATH)).toBe(true);
-    expect(fs.existsSync(UPLOAD_DIR)).toBe(true);
+  describe("constructor", () => {
+    it("creates upload and audio directories if they do not exist", () => {
+      expect(fs.existsSync(path.join(tmpDir, "uploads"))).toBe(true);
+      expect(fs.existsSync(path.join(tmpDir, "audio"))).toBe(true);
+    });
+
+    it("initialises an empty db.json", () => {
+      const content = fs.readFileSync(path.join(tmpDir, "db.json"), "utf-8");
+      expect(JSON.parse(content)).toEqual({});
+    });
   });
 
-  it("should successfully serialize and save a Document and its CaterpillarsAdvice", async () => {
-    const documentId = "doc_test_123";
-    const advice = new CaterpillarsAdvice(
-        "Seek the blue mushroom.",
-        [{ term: "Mushroom", definition: "A magical fungi." }]
-    );
-    
-    const doc = new Document(
-      documentId,
-      "Wonderland Physics",
-      ["page1.png", "page2.png"],
-      [path.join(UPLOAD_DIR, "page1.png"), path.join(UPLOAD_DIR, "page2.png")],
-      new Date("2024-01-01T12:00:00Z"),
-      "Sample text extracted from pages.",
-      "/api/audio/doc_test_123.mp3",
-      advice
-    );
+  describe("saveDocument / getDocumentById", () => {
+    it("persists and retrieves a document", async () => {
+      const doc = makeDocument();
+      await adapter.saveDocument(doc);
+      const retrieved = await adapter.getDocumentById("doc-1", USER_ID);
+      expect(retrieved).not.toBeNull();
+      expect(retrieved!.id).toBe("doc-1");
+      expect(retrieved!.title).toBe("Test Title");
+      expect(retrieved!.userId).toBe(USER_ID);
+    });
 
-    await adapter.saveDocument(doc);
-    
-    // Read raw schema to verify
-    const dbContent = fs.readFileSync(DB_PATH, "utf-8");
-    const json = JSON.parse(dbContent);
-    expect(json[documentId]).toBeDefined();
-    expect(json[documentId].title).toBe("Wonderland Physics");
-    expect(json[documentId].originalFilenames).toEqual(["page1.png", "page2.png"]);
-    expect(json[documentId].explanation).toBeDefined();
-    expect(json[documentId].explanation.explanationText).toBe("Seek the blue mushroom.");
+    it("returns null for a non-existent ID", async () => {
+      const result = await adapter.getDocumentById("no-such-id", USER_ID);
+      expect(result).toBeNull();
+    });
+
+    it("returns null when the userId does not match", async () => {
+      await adapter.saveDocument(makeDocument("doc-1", USER_ID));
+      const result = await adapter.getDocumentById("doc-1", "other-user");
+      expect(result).toBeNull();
+    });
+
+    it("returns null for IDs with invalid characters (prototype pollution guard)", async () => {
+      const result = await adapter.getDocumentById("__proto__", USER_ID);
+      expect(result).toBeNull();
+    });
+
+    it("persists and deserializes CaterpillarsAdvice", async () => {
+      const advice = new CaterpillarsAdvice(
+        "Here is the explanation.",
+        [{ term: "Osmosis", definition: "Water movement across a membrane." }],
+        [{ speaker: "Alice", text: "Oh, I see!" }]
+      );
+      const doc = makeDocument();
+      doc.setExplanation(advice);
+      await adapter.saveDocument(doc);
+
+      const retrieved = await adapter.getDocumentById("doc-1", USER_ID);
+      expect(retrieved!.explanation).not.toBeNull();
+      expect(retrieved!.explanation!.explanationText).toBe("Here is the explanation.");
+      expect(retrieved!.explanation!.glossary[0].term).toBe("Osmosis");
+      expect(retrieved!.explanation!.focusSessionScript![0].speaker).toBe("Alice");
+    });
+
+    it("overwrites an existing document on re-save", async () => {
+      const doc = makeDocument();
+      await adapter.saveDocument(doc);
+      doc.setAudioUrl("/api/audio/doc-1.mp3");
+      await adapter.saveDocument(doc);
+
+      const retrieved = await adapter.getDocumentById("doc-1", USER_ID);
+      expect(retrieved!.audioUrl).toBe("/api/audio/doc-1.mp3");
+    });
   });
 
-  it("should successfully deserialize the stored JSON accurately back into a Document class instance", async () => {
-    const documentId = "doc_test_123";
-    const doc = await adapter.getDocumentById(documentId);
-    
-    expect(doc).toBeInstanceOf(Document);
-    expect(doc?.id).toBe(documentId);
-    expect(doc?.originalFilenames).toHaveLength(2);
-    expect(doc?.extractedText).toBe("Sample text extracted from pages.");
-    expect(doc?.audioUrl).toBe("/api/audio/doc_test_123.mp3");
+  describe("getAllDocuments", () => {
+    it("returns only documents belonging to the requesting user", async () => {
+      await adapter.saveDocument(makeDocument("doc-a", USER_ID));
+      await adapter.saveDocument(makeDocument("doc-b", "other-user"));
+      const results = await adapter.getAllDocuments(USER_ID);
+      expect(results).toHaveLength(1);
+      expect(results[0].id).toBe("doc-a");
+    });
 
-    // Check advice domain modeling recreated successfully
-    expect(doc?.explanation).toBeInstanceOf(CaterpillarsAdvice);
-    expect(doc?.explanation?.explanationText).toBe("Seek the blue mushroom.");
-    expect(doc?.explanation?.glossary).toHaveLength(1);
-    expect(doc?.explanation?.glossary?.[0].term).toBe("Mushroom");
+    it("returns an empty array when user has no documents", async () => {
+      const results = await adapter.getAllDocuments("nobody");
+      expect(results).toEqual([]);
+    });
+
+    it("returns documents sorted newest first", async () => {
+      const older = new Document("doc-old", "Old", ["p.png"], ["/tmp/p.png"], new Date("2024-01-01"), "t", undefined, undefined, USER_ID);
+      const newer = new Document("doc-new", "New", ["p.png"], ["/tmp/p.png"], new Date("2024-06-01"), "t", undefined, undefined, USER_ID);
+      await adapter.saveDocument(older);
+      await adapter.saveDocument(newer);
+
+      const results = await adapter.getAllDocuments(USER_ID);
+      expect(results[0].id).toBe("doc-new");
+      expect(results[1].id).toBe("doc-old");
+    });
   });
 
-  it("should correctly iterate and execute saveFiles resolving with an array of saved paths", async () => {
-    const filesToSave = [
-      { buffer: Buffer.from("fake binary png A"), fileName: "uploadA.png" },
-      { buffer: Buffer.from("fake binary png B"), fileName: "uploadB.png" }
-    ];
+  describe("deleteDocument", () => {
+    it("removes the document record", async () => {
+      await adapter.saveDocument(makeDocument());
+      await adapter.deleteDocument("doc-1", USER_ID);
+      const result = await adapter.getDocumentById("doc-1", USER_ID);
+      expect(result).toBeNull();
+    });
 
-    const savedPaths = await adapter.saveFiles(filesToSave);
+    it("is a no-op when the document does not exist", async () => {
+      await expect(adapter.deleteDocument("ghost", USER_ID)).resolves.toBeUndefined();
+    });
 
-    expect(savedPaths).toHaveLength(2);
-    
-    // Check returned output paths explicitly match expected destination
-    expect(savedPaths[0]).toBe(path.join(UPLOAD_DIR, "uploadA.png"));
-    expect(savedPaths[1]).toBe(path.join(UPLOAD_DIR, "uploadB.png"));
+    it("does not delete a document owned by another user", async () => {
+      await adapter.saveDocument(makeDocument("doc-1", USER_ID));
+      await adapter.deleteDocument("doc-1", "attacker");
+      const result = await adapter.getDocumentById("doc-1", USER_ID);
+      expect(result).not.toBeNull();
+    });
 
-    // Verify it actually wrote the binary content to the temporary FS properly
-    expect(fs.readFileSync(savedPaths[0], "utf-8")).toBe("fake binary png A");
-    expect(fs.readFileSync(savedPaths[1], "utf-8")).toBe("fake binary png B");
+    it("deletes associated upload files", async () => {
+      const uploadPath = path.join(tmpDir, "uploads", "doc-1_page_1.png");
+      fs.writeFileSync(uploadPath, "fake-image");
+
+      const doc = new Document(
+        "doc-1",
+        "Title",
+        ["doc-1_page_1.png"],
+        [uploadPath],
+        new Date(),
+        "txt",
+        undefined,
+        undefined,
+        USER_ID
+      );
+      await adapter.saveDocument(doc);
+      await adapter.deleteDocument("doc-1", USER_ID);
+
+      expect(fs.existsSync(uploadPath)).toBe(false);
+    });
+  });
+
+  describe("saveFile", () => {
+    it("writes a file to the upload directory and returns its path", async () => {
+      const buf = Buffer.from("fake-png-data");
+      const resultPath = await adapter.saveFile(buf, "test.png");
+      expect(fs.existsSync(resultPath)).toBe(true);
+    });
+
+    it("rejects disallowed extensions", async () => {
+      await expect(adapter.saveFile(Buffer.from("data"), "evil.exe")).rejects.toThrow();
+    });
+  });
+
+  describe("write queue (concurrency)", () => {
+    it("serialises concurrent saves without data loss", async () => {
+      const docs = Array.from({ length: 5 }, (_, i) => makeDocument(`doc-${i}`));
+      await Promise.all(docs.map((d) => adapter.saveDocument(d)));
+      const all = await adapter.getAllDocuments(USER_ID);
+      expect(all).toHaveLength(5);
+    });
   });
 });

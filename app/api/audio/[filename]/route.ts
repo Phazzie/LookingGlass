@@ -1,8 +1,11 @@
+export const dynamic = "force-dynamic";
+
 import fs from "fs";
 import { createReadStream } from "fs";
 import path from "path";
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "../../../../auth";
+import { AppError } from "../../../../core/errors/AppErrors";
 
 interface RouteContext {
   params: Promise<{ filename: string }>;
@@ -52,6 +55,9 @@ export async function GET(req: NextRequest, context: RouteContext) {
     });
   } catch (error) {
     console.error("[GET /api/audio/[filename]]", error);
+    if (error instanceof AppError) {
+      return NextResponse.json({ error: error.message }, { status: error.httpStatusCode });
+    }
     return NextResponse.json({ error: "Failed to serve audio file." }, { status: 500 });
   }
 }
