@@ -20,7 +20,6 @@ export class Document {
   private _audioUrl: string | undefined;
   private readonly _createdAt: Date;
   private _explanation: CaterpillarsAdvice | undefined;
-  private readonly _userId: string;
 
   constructor(
     id: string,
